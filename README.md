@@ -1,55 +1,55 @@
 # context-window-awareness
 
-A small Claude Code hook that gives the **assistant** the same view of context-window usage that you already see in the CLI meter or desktop status bar.
+A Claude Code plugin that gives the **assistant** the same situational awareness you already have: how full the context window is, when a natural break point arrives, whether there's uncommitted work, and whether tool calls are failing in a burst.
 
 ## The problem
 
-Claude Code shows you, the human, how full the context window is — there's a percentage in the status line, a `/context` command, and a meter on the desktop app. But that number is computed locally and is **never sent back to the model**. So the assistant has no native way to know "I'm at 60% — I should suggest a compact at the next break point." It can only guess from session shape.
+Claude Code shows *you* a context-window meter, lets you see tool errors as they happen, and renders your git state in your terminal. But none of that is sent back to the model on the next turn — the assistant has to guess from session shape. That's why long sessions drift past clean break points, why a forced `/compact` sometimes drops uncommitted work from view, and why a confused assistant keeps retrying through a burst of tool errors instead of pausing to reassess.
 
-This hook closes the loop: it reads the active session's transcript, estimates token usage, and — when usage crosses a configured threshold (40%, 60%, 75%, 85%, 92%) — injects a `<system-reminder>` into the next turn so the assistant sees the same number you do.
+This plugin closes the loop. On every prompt it reads the active session's transcript, computes signals locally, and — when something crosses a configured threshold — injects a `<system-reminder>` into the next turn so the model sees the same picture you do.
 
-## What the assistant sees
+## Four signals (each toggleable)
 
-When usage crosses a threshold, the next turn's context gains a line like:
+| Signal              | Fires when…                                                                     |
+|---------------------|---------------------------------------------------------------------------------|
+| **Context meter**   | Token usage crosses 40%, 60%, 75%, 85%, or 92% of the configured window.        |
+| **Compact nudge**   | Context ≥ 75% **and** the recent transcript shows a natural completion (a `git commit`, "all tests pass", a deploy/ship/merge phrase). Suggests `/compact` at a clean break. |
+| **Uncommitted guard** | Context ≥ 75% **and** `git status` in the project shows uncommitted files. Warns to commit/stash before any compact so in-flight work isn't dropped. |
+| **Error burst**     | ≥ 5 tool errors in the last 50 transcript entries. Encourages a pause to reassess instead of bashing on. |
+
+Each signal fires **once per condition per session**. No spam.
+
+## Install (plugin marketplace — one command)
+
+In Claude Code:
 
 ```
-<system-reminder>
-[context-window-awareness] Approximate context usage: 62%
-(~124,000 of 200,000 tokens, ~76,000 remaining). Crossed the 60%
-threshold — past halfway — start thinking about a clean break point.
-</system-reminder>
+/plugin marketplace add https://github.com/miniminer-droid/context-window-awareness
+/plugin install context-window-awareness@context-window-awareness
 ```
 
-The reminder fires **once per threshold per session** — you won't get spammed every turn.
-
-## Install
-
-```bash
-git clone https://github.com/<you>/context-window-awareness.git ~/.claude-hooks/context-window-awareness
-chmod +x ~/.claude-hooks/context-window-awareness/context_meter.py
-```
-
-(Optional, for more accurate token counts:)
+That's it. The hook activates immediately. Optionally install `tiktoken` for a more accurate token count:
 
 ```bash
 pip install --user tiktoken
 ```
 
-Without `tiktoken` the script uses a chars-per-token heuristic. The estimate is close enough to be useful but a few percent off — that's fine for a "you're getting heavy" signal, not fine for cost accounting.
+Without `tiktoken`, the script falls back to a chars-per-token heuristic that you can fine-tune (see **Calibration** below).
 
-## Configure
+## Install (manual — without the marketplace)
 
-Add a `UserPromptSubmit` hook to `~/.claude/settings.json`:
+If you don't want to add a marketplace, clone the repo and wire the hook into `~/.claude/settings.json` directly:
 
 ```json
 {
   "hooks": {
     "UserPromptSubmit": [
       {
+        "matcher": "",
         "hooks": [
           {
             "type": "command",
-            "command": "/Users/YOU/.claude-hooks/context-window-awareness/context_meter.py"
+            "command": "/absolute/path/to/context-window-awareness/plugins/context-window-awareness/hooks/context_meter.py"
           }
         ]
       }
@@ -58,52 +58,91 @@ Add a `UserPromptSubmit` hook to `~/.claude/settings.json`:
 }
 ```
 
-Replace `/Users/YOU/...` with the absolute path you cloned to. The hook fires on every user message, computes usage, and stays silent unless a new threshold has been crossed.
+## Calibration (fine-tune the estimate)
 
-### Customize thresholds and window size
+The default heuristic estimates ~5–10% high. To match what your CLI's `/context` actually shows:
 
-Create `~/.config/context-window-awareness/config.json`:
+1. In Claude Code, run `/context` and note the actual token count.
+2. Run:
+   ```bash
+   python3 ~/.../context-window-awareness/plugins/context-window-awareness/hooks/context_meter.py --calibrate 73600
+   ```
+   (replacing `73600` with whatever `/context` reported).
+3. The script reads your most recent transcript, compares its estimate to the value you provided, and writes a `correction_factor` to `~/.config/context-window-awareness/config.json`. Future runs apply the factor automatically.
+
+Re-run whenever the gap drifts (e.g. after switching models or window sizes).
+
+## Configure
+
+Create `~/.config/context-window-awareness/config.json` to override defaults. All fields optional:
 
 ```json
 {
-  "context_window": 200000,
+  "context_window": 1000000,
   "thresholds": [40, 60, 75, 85, 92],
   "chars_per_token": 3.5,
-  "quiet_under_pct": 30
+  "correction_factor": 1.0,
+  "quiet_under_pct": 30,
+  "features": {
+    "context_meter": true,
+    "compact_nudge": true,
+    "uncommitted_guard": true,
+    "error_burst": true
+  },
+  "compact_nudge_threshold_pct": 75,
+  "uncommitted_guard_threshold_pct": 75,
+  "error_burst_window": 50,
+  "error_burst_threshold": 5
 }
 ```
 
-| Field | Default | What it does |
-|-------|---------|--------------|
-| `context_window` | `200000` | Total window in tokens. Set to `1000000` for Opus 1M, `200000` for Sonnet/Haiku. |
-| `thresholds` | `[40, 60, 75, 85, 92]` | Percentages that trigger a reminder. The hook fires on the highest threshold crossed and remembers the level so it doesn't repeat. |
-| `chars_per_token` | `3.5` | Fallback ratio when `tiktoken` isn't installed. Lower = more conservative (over-estimates tokens). |
-| `quiet_under_pct` | First threshold | Skip the work entirely below this percentage — saves a few ms on light sessions. |
+| Field | Default | Notes |
+|-------|---------|-------|
+| `context_window` | `200000` | `1000000` for Opus 4.7 1M; `200000` for standard Sonnet/Haiku. |
+| `thresholds` | `[40, 60, 75, 85, 92]` | Percentages that trigger meter reminders. |
+| `chars_per_token` | `3.5` | Used only when `tiktoken` isn't installed. |
+| `correction_factor` | `1.0` | Set automatically by `--calibrate`. Multiplies the raw estimate. |
+| `quiet_under_pct` | `30` | Skip work entirely below this percentage (cheap idle path). |
+| `features.*` | all `true` | Disable any signal you don't want. |
+| `compact_nudge_threshold_pct` | `75` | Minimum context % before a completion signal triggers a compact nudge. |
+| `uncommitted_guard_threshold_pct` | `75` | Minimum context % before checking `git status`. |
+| `error_burst_window` | `50` | Number of recent transcript entries to scan for errors. |
+| `error_burst_threshold` | `5` | Errors within the window required to trigger the alert. |
 
-State is kept under `~/.cache/context-window-awareness/<session_id>.txt`. Delete that directory to reset.
+State (per-session "already reported" flags) is kept under `~/.cache/context-window-awareness/`. Delete that directory to reset.
 
-## Verify it works
+## Verify
 
 ```bash
-python3 ~/.claude-hooks/context-window-awareness/context_meter.py --selftest
+python3 ~/.../context_meter.py --selftest
 ```
 
-You should see a synthetic reminder printed to stdout. If you see nothing, the script isn't finding tiktoken or the heuristic — re-check your install.
+Expect a JSON envelope on stdout with one or more `[context-window-awareness] …` lines inside `additionalContext`.
 
 ## How it works
 
-1. Claude Code fires `UserPromptSubmit` hooks before sending your message to the model. Each hook receives a JSON payload on stdin including `transcript_path` (a `.jsonl` file with the full session) and `session_id`.
-2. The hook concatenates every transcript line and either tokenizes with `tiktoken` (preferred) or falls back to `len(text) / chars_per_token`.
-3. It compares the count to the configured window, finds the highest threshold crossed, and checks a per-session state file to see if that level has already been reported.
-4. If it's a new threshold, the script writes a `<system-reminder>` to stdout. Claude Code appends hook stdout to the model's context for that turn — that's how the assistant "sees" the meter.
-5. Anything below the lowest threshold is silent. No output, no overhead beyond reading the transcript.
+1. Claude Code fires `UserPromptSubmit` hooks on every user message and passes a JSON payload (including `transcript_path`, `cwd`, `session_id`) on stdin.
+2. The hook reads the transcript `.jsonl`, estimates tokens (`tiktoken` or chars/N), and runs each enabled signal.
+3. For each signal that triggers, it appends a line to a buffer.
+4. The hook prints a JSON envelope:
+   ```json
+   {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "..."}}
+   ```
+   Claude Code injects the `additionalContext` into the model's view for that turn.
+5. Per-session state files prevent re-firing once a threshold/condition is reported.
 
 ## Caveats
 
-- **The token count is an estimate.** The Claude server tokenizes differently from `cl100k_base`. Expect ±5% accuracy. This is fine for "should I compact?" decisions; it's not fine for billing.
-- **The reminder is advisory.** The assistant decides what to do with it — usually that's "suggest a compact at a natural break point" rather than "compact immediately." If you want hard behaviour, write that into your `CLAUDE.md`.
-- **Per-session state is keyed by `session_id`.** If Claude Code rotates session IDs (e.g. after a compact), the thresholds reset, which is usually what you want — a fresh window deserves fresh reminders.
-- **The hook adds ~50–200ms per prompt** depending on transcript size and whether `tiktoken` is loaded. Negligible in practice.
+- **Token count is an estimate.** Even with `tiktoken` it differs from Anthropic's server-side tokenizer. Use `--calibrate` to fit it to your reality.
+- **Reminders are advisory.** The assistant decides what to do with them. If you want hard behaviour ("always compact at 80%"), put that in your `CLAUDE.md`.
+- **The compact nudge uses regex pattern-matching** for completion signals. False positives are harmless (an extra nudge); false negatives mean an occasional missed nudge — fine.
+- **Latency added per prompt:** typically 50–200 ms depending on transcript size and whether `tiktoken` is loaded.
+
+## Why this exists
+
+The pattern is general: the assistant working *inside* a system is blind to its own blind spots. The runtime knows things it doesn't tell the model — context %, tool errors, working-tree state. This plugin is one small example of routing local awareness back into the model's view so it can act on what's true.
+
+If you find more signals that fit the same pattern (things you can see locally that the model can't), open an issue or PR.
 
 ## License
 
