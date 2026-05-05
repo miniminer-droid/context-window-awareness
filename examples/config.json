@@ -1,0 +1,7 @@
+{
+  "_comment": "Drop this at ~/.config/context-window-awareness/config.json to override defaults.",
+  "context_window": 200000,
+  "thresholds": [40, 60, 75, 85, 92],
+  "chars_per_token": 3.5,
+  "quiet_under_pct": 30
+}

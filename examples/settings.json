@@ -1,0 +1,15 @@
+{
+  "_comment": "Drop this hooks block into ~/.claude/settings.json. Replace the absolute path with wherever you cloned the repo.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/YOU/.claude-hooks/context-window-awareness/context_meter.py"
+          }
+        ]
+      }
+    ]
+  }
+}
