@@ -95,9 +95,50 @@ def load_config() -> dict:
         return {}
 
 
+def load_project_config(cwd: str | None) -> dict:
+    """Read .context-window-awareness.json from the project's cwd, if present.
+
+    Project config wins over global config — useful when one project uses
+    Opus 1M and another uses Sonnet 200K.
+    """
+    if not cwd:
+        return {}
+    proj = Path(cwd) / ".context-window-awareness.json"
+    if not proj.exists():
+        return {}
+    try:
+        return json.loads(proj.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
 def save_config(cfg: dict) -> None:
     _config_path().parent.mkdir(parents=True, exist_ok=True)
     _config_path().write_text(json.dumps(cfg, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Model detection — infer window size from transcript when not configured
+# ---------------------------------------------------------------------------
+
+# Variant suffixes that signal a non-default window. The Opus 4.7 [1m] variant
+# uses a 1M window even though the message-level model field reports the
+# family alias ("claude-opus-4-7") without the suffix; the suffix appears in
+# the system prompt env block so a substring scan over the whole transcript
+# catches it. Add new variants here as Anthropic ships them.
+LARGE_CONTEXT_VARIANT_MARKERS = ("[1m]",)
+LARGE_CONTEXT_WINDOW = 1_000_000
+
+CLAUDE_MODEL_RE = re.compile(r"claude-[a-z]+-\d+(?:-\d+)?", re.IGNORECASE)
+
+
+def detect_model_window(transcript_text: str) -> int | None:
+    """Best-effort window inference from transcript text. None if no signal."""
+    if any(marker in transcript_text for marker in LARGE_CONTEXT_VARIANT_MARKERS):
+        return LARGE_CONTEXT_WINDOW
+    if CLAUDE_MODEL_RE.search(transcript_text):
+        return 200_000
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -283,8 +324,17 @@ def main() -> int:
         emit(None)
         return 0
 
-    cfg = load_config()
-    window = int(cfg.get("context_window", DEFAULT_WINDOW))
+    # Layered config: project (.context-window-awareness.json in cwd) wins
+    # over global (~/.config/...). Features dicts are merged shallowly so a
+    # project file can disable a single signal without re-listing the rest.
+    global_cfg = load_config()
+    project_cfg = load_project_config(cwd)
+    cfg: dict = {**global_cfg, **project_cfg}
+    cfg["features"] = {
+        **(global_cfg.get("features") or {}),
+        **(project_cfg.get("features") or {}),
+    }
+
     thresholds = sorted({int(t) for t in cfg.get("thresholds", DEFAULT_THRESHOLDS)})
     cpt = float(cfg.get("chars_per_token", DEFAULT_CHARS_PER_TOKEN))
     correction = float(cfg.get("correction_factor", DEFAULT_CORRECTION))
@@ -299,6 +349,16 @@ def main() -> int:
         emit(None)
         return 0
     text = "\n".join(lines)
+
+    # Window resolution order:
+    #   1. explicit `context_window` from project or global config
+    #   2. detected from transcript model ID (e.g. "[1m]" → 1M, otherwise 200K)
+    #   3. DEFAULT_WINDOW
+    if "context_window" in cfg:
+        window = int(cfg["context_window"])
+    else:
+        window = detect_model_window(text) or DEFAULT_WINDOW
+
     tokens = estimate_tokens(text, cpt, correction)
     pct = (tokens / window) * 100 if window > 0 else 0.0
 

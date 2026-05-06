@@ -74,7 +74,13 @@ Re-run whenever the gap drifts (e.g. after switching models or window sizes).
 
 ## Configure
 
-Create `~/.config/context-window-awareness/config.json` to override defaults. All fields optional:
+Configuration is layered. Three places, highest priority wins:
+
+1. **Project config** — `.context-window-awareness.json` in the working directory. Use this when one project needs different settings (e.g. an Opus 1M project vs a Sonnet 200K project). Project keys override global keys; the `features` block is merged shallowly, so you can disable a single signal without re-listing the others.
+2. **Global config** — `~/.config/context-window-awareness/config.json`. Applies to every session that doesn't have a project file.
+3. **Auto-detection** — when no `context_window` is set in either config, the hook scans the transcript for the model variant. `[1m]` markers (e.g. `claude-opus-4-7[1m]`) → 1M window; any other Claude model → 200K. Falls back to 200K if nothing matches.
+
+The fields below apply to either config:
 
 ```json
 {
@@ -98,7 +104,7 @@ Create `~/.config/context-window-awareness/config.json` to override defaults. Al
 
 | Field | Default | Notes |
 |-------|---------|-------|
-| `context_window` | `200000` | `1000000` for Opus 4.7 1M; `200000` for standard Sonnet/Haiku. |
+| `context_window` | auto-detected | If set, takes precedence over auto-detection. `1000000` for Opus 4.7 1M; `200000` for standard Sonnet/Haiku/Opus. Omit to let the hook infer from transcript. |
 | `thresholds` | `[40, 60, 75, 85, 92]` | Percentages that trigger meter reminders. |
 | `chars_per_token` | `3.5` | Used only when `tiktoken` isn't installed. |
 | `correction_factor` | `1.0` | Set automatically by `--calibrate`. Multiplies the raw estimate. |

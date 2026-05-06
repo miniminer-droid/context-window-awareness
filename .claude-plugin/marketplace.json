@@ -8,7 +8,7 @@
       "name": "context-window-awareness",
       "source": "./plugins/context-window-awareness",
       "description": "Lets the assistant see the same context-window meter you see — plus compact nudges, uncommitted-work guards, and error-burst alerts.",
-      "version": "0.1.0"
+      "version": "0.2.0"
     }
   ]
 }

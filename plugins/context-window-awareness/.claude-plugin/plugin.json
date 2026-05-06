@@ -1,6 +1,6 @@
 {
   "name": "context-window-awareness",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Surfaces signals the user can see locally but the model can't: context-window % usage, compact nudges at completion points, uncommitted-work guard, and tool-error bursts.",
   "author": {
     "name": "James Cooper"
