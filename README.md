@@ -150,6 +150,10 @@ The pattern is general: the assistant working *inside* a system is blind to its 
 
 If you find more signals that fit the same pattern (things you can see locally that the model can't), open an issue or PR.
 
+## The behavioural layer (optional)
+
+This plugin supplies the *signal*. What the assistant should **do** with it — compact at a committed boundary, persist durable state so a forced `/compact` loses nothing, never act on a context % it can't actually verify — is a separate, behavioural concern. If you want that encoded as a reusable skill rather than relying on ad-hoc judgement, the **Context Budget Manager** skill at [Skill Locker](https://skilllocker.ai/pricing) pairs with this plugin (it works standalone too). The plugin stays free and MIT regardless; this is a "free tool + optional paid judgement" split, not a paywall.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
